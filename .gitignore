@@ -3,9 +3,3 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Virtual Environment
-venv/
-
-# VS Code
-.vscode/
