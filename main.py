@@ -1,97 +1,97 @@
-from dotenv import load_dotenv
+import asyncio
 import os
-from aiogram import Bot, Dispatcher, executor, types
-import openai
-import sys
+import logging
+from dotenv import load_dotenv
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from openai import OpenAI
 
+# --- Setup ---
+# Load environment variables from .env file
 load_dotenv()
-openai.api_key = os.getenv("OpenAI_API_KEY")  
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+
+# Initialize OpenAI client (v1.x syntax)
+# It automatically uses the OPENAI_API_KEY from your .env file
+client = OpenAI()
+
+# Get Telegram token
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-
-class Reference:
-    '''
-    A class to store previously response from the openai API
-    '''
-
-    def __init__(self) -> None:
-        self.response = ""
-
-
-
-reference = Reference()
+# --- In-memory storage for conversation history ---
+# Using a dictionary to store history for each user separately
+user_history = {}
 model_name = "gpt-3.5-turbo"
 
+# --- Dispatcher and Bot Initialization ---
+dp = Dispatcher()
 
-
-# Initialize bot and dispatcher
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
-dispatcher = Dispatcher(bot)
-
-
-
-def clear_past():
-    """A function to clear the previous conversation and context.
+# --- HANDLER FUNCTIONS ---
+@dp.message(Command(commands=['start', 'help']))
+async def send_welcome(message: types.Message):
     """
-    reference.response = ""
-
-
-
-@dispatcher.message_handler(commands=['clear'])
-async def clear(message: types.Message):
+    This handler replies to /start and /help commands.
     """
-    A handler to clear the previous conversation and context.
-    """
-    clear_past()
-    await message.reply("I've cleared the past conversation and context.")
-
-
-
-@dispatcher.message_handler(commands=['start'])
-async def welcome(message: types.Message):
-    """
-    This handler receives messages with `/start` or  `/help `command
-    """
-    await message.reply("Hi\nI am Tele Bot!\Created by Aditya. How can i assist you?")
-
-
-@dispatcher.message_handler(commands=['help'])
-async def helper(message: types.Message):
-    """
-    A handler to display the help menu.
-    """
-    help_command = """
-    Hi There, I'm Telegram bot created by Aditya! Please follow these commands - 
-    /start - to start the conversation
-    /clear - to clear the past conversation and context.
-    /help - to get this help menu.
-    I hope this helps. :)
-    """
-    await message.reply(help_command)
-
-
-
-
-
-@dispatcher.message_handler()
-async def chatgpt(message: types.Message):
-    """
-    A handler to process the user's input and generate a response using the chatGPT API.
-    """
-    print(f">>> USER: \n\t{message.text}")
-    response = openai.ChatCompletion.create(
-        model = model_name,
-        messages = [
-            {"role": "assistant", "content": reference.response}, # role assistant
-            {"role": "user", "content": message.text} #our query 
-        ]
+    help_text = (
+        "Hi! I'm a Telegram bot powered by OpenAI. Here are the commands:\n"
+        "/start or /help - Show this help menu\n"
+        "/clear - Clear your conversation history\n\n"
+        "Just type any message to chat with me!"
     )
-    reference.response = response['choices'][0]['message']['content']
-    print(f">>> chatGPT: \n\t{reference.response}")
-    await bot.send_message(chat_id = message.chat.id, text = reference.response)
+    await message.answer(help_text)
 
+@dp.message(Command(commands=['clear']))
+async def clear_history(message: types.Message):
+    """
+    This handler clears the user's conversation history.
+    """
+    user_id = message.from_user.id
+    user_history[user_id] = []
+    await message.answer("I've cleared our past conversation history.")
 
-if __name__ == "__main__":
-    executor.start_polling(dispatcher, skip_updates=False)
+@dp.message()
+async def handle_chat(message: types.Message):
+    """
+    This handler processes the user's input and generates a response using the OpenAI API.
+    """
+    user_id = message.from_user.id
+    user_input = message.text
 
+    # Get or create the user's history
+    if user_id not in user_history:
+        user_history[user_id] = []
 
+    # Add the user's message to their history
+    user_history[user_id].append({"role": "user", "content": user_input})
+
+    logging.info(f"User {user_id} said: {user_input}")
+
+    try:
+        # Create the API call using the user's history
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=user_history[user_id]
+        )
+        
+        bot_response = response.choices[0].message.content
+        
+        # Add the bot's response to the history
+        user_history[user_id].append({"role": "assistant", "content": bot_response})
+        
+        logging.info(f"Bot response to {user_id}: {bot_response}")
+        await message.answer(bot_response)
+
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
+        await message.answer("Sorry, I'm having trouble connecting to the AI model right now.")
+
+# --- Bot Startup ---
+async def main():
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    await dp.start_polling(bot)
+
+if __name__ == '__main__':
+    logging.info("Starting bot...")
+    asyncio.run(main())
